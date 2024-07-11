@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebRTC Audio Chat</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+  <div class="w-full max-w-lg bg-white p-8 rounded shadow-md">
+    <div id="join-room" class="flex flex-col items-center">
+      <h2 class="text-2xl font-bold mb-4">Join Room</h2>
+      <input id="username" type="text" placeholder="Enter your name" class="mb-4 px-4 py-2 border-2 rounded w-full" />
+      <button id="join-btn" class="bg-blue-500 text-white px-4 py-2 rounded">Join</button>
+    </div>
+
+    <div id="room" class="hidden">
+      <h2 class="text-2xl font-bold mb-4">Room</h2>
+      <div id="users" class="mb-4"></div>
+      <button id="leave-btn" class="bg-red-500 text-white px-4 py-2 rounded">Leave Room</button>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const socket = io('http://localhost:1337');
+      const joinRoomDiv = document.getElementById('join-room');
+      const roomDiv = document.getElementById('room');
+      const usernameInput = document.getElementById('username');
+      const joinBtn = document.getElementById('join-btn');
+      const leaveBtn = document.getElementById('leave-btn');
+      const usersDiv = document.getElementById('users');
+      let localStream;
+      let peerConnection;
+      let username;
+
+      const initPeerConnection = () => {
+        peerConnection = new RTCPeerConnection();
+
+        peerConnection.ontrack = (event) => {
+          const [remoteStream] = event.streams;
+          const audioElement = document.createElement('audio');
+          audioElement.srcObject = remoteStream;
+          audioElement.autoplay = true;
+          document.body.appendChild(audioElement);
+        };
+
+        peerConnection.onicecandidate = async (e) => {
+          if (e.candidate) {
+            await socket.emit('candidate', JSON.stringify(e.candidate));
+          }
+        };
+      };
+
+      const handleJoin = async () => {
+        username = usernameInput.value.trim();
+        if (!username) return alert('Please enter your name');
+
+        joinRoomDiv.classList.add('hidden');
+        roomDiv.classList.remove('hidden');
+
+        // Get the audio stream from the user's microphone
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        initPeerConnection();
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        // Create an offer and set it as the local description
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+
+        // Send the offer to the server
+        socket.emit('join', { username, offer: JSON.stringify(peerConnection.localDescription) });
+
+        // Display local user
+        addUser({ id: socket.id, username });
+      };
+
+      const handleLeave = () => {
+        localStream.getTracks().forEach(track => track.stop());
+        peerConnection.close();
+        socket.emit('leave', socket.id);
+        joinRoomDiv.classList.remove('hidden');
+        roomDiv.classList.add('hidden');
+        usersDiv.innerHTML = '';
+      };
+
+      const addUser = (user) => {
+        const userDiv = document.createElement('div');
+        userDiv.id = user.id;
+        userDiv.className = 'flex items-center justify-between p-2 bg-gray-200 rounded mb-2';
+        userDiv.innerHTML = `
+                    <span>${user.username}</span>
+                    <button class="mute-btn bg-gray-500 text-white px-2 py-1 rounded">Mute</button>
+                `;
+        usersDiv.appendChild(userDiv);
+
+        userDiv.querySelector('.mute-btn').addEventListener('click', (e) => {
+
+          if(userDiv.id !== user.id) return alert('not allowed!')
+
+          const audioTrack = localStream.getAudioTracks()[0];
+          audioTrack.enabled = !audioTrack.enabled;
+          e.target.textContent = audioTrack.enabled ? 'Mute' : 'Unmute';
+          e.target.classList.toggle('bg-red-500');
+        });
+      };
+
+      joinBtn.addEventListener('click', handleJoin);
+      leaveBtn.addEventListener('click', handleLeave);
+
+      socket.on('joined', (user) => {
+        if (user.id !== socket.id) addUser(user);
+      });
+
+      socket.on('left', (id) => {
+        const userDiv = document.getElementById(id);
+        if (userDiv) userDiv.remove();
+      });
+
+      socket.on('offer', async ({ id, offer }) => {
+        if (id === socket.id) return;
+        await peerConnection.setRemoteDescription(JSON.parse(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit('answer', { id, answer: JSON.stringify(peerConnection.localDescription) });
+      });
+
+      socket.on('answer', async ({ answer }) => {
+        await peerConnection.setRemoteDescription(JSON.parse(answer));
+      });
+
+      socket.on('candidate', async (candidate) => {
+        await peerConnection.addIceCandidate(JSON.parse(candidate));
+      });
+    });
+  </script>
+</body>
+
+</html>
