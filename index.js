@@ -40,4 +40,6 @@ io.on('connection', (socket) => {
 	});
 });
 
-app.listen(1337, () => console.log(`Listening on port: 1337`));
+const PORT = process.env.PORT ?? 1337
+
+app.listen(PORT, () => console.log(`Listening on port: ${PORT}`));
